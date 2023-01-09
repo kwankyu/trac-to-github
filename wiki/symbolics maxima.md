@@ -1,15 +1,15 @@
-### Absolute dependencies on pexpect-maxima ([#17753](https://trac.sagemath.org/ticket/17753))
+### Absolute dependencies on pexpect-maxima (#17753)
 
 * *`calculus/desolvers.py`*: `desolve_*()`
-* *`combinat/combinat.py`*: `euler_number()` ([#17770](https://trac.sagemath.org/ticket/17770) and [#20763](https://trac.sagemath.org/ticket/20763))
-* *`geometry/lattice_polytope.py`*: `positive_integer_relations()` (see [#20766](https://trac.sagemath.org/ticket/20766))
-* *`functions/orthogonal_polys.py`*: `hermite()` ([#20297](https://trac.sagemath.org/ticket/20297)), `jacobi_P()` ([#22326](https://trac.sagemath.org/ticket/22326)), `laguerre()` ([#16813](https://trac.sagemath.org/ticket/16813)), `legendre_P/Q()` ([#17151](https://trac.sagemath.org/ticket/17151)), `ultraspherical()` ([#20428](https://trac.sagemath.org/ticket/20428))
+* *`combinat/combinat.py`*: `euler_number()` (#17770 and #20763)
+* *`geometry/lattice_polytope.py`*: `positive_integer_relations()` (see #20766)
+* *`functions/orthogonal_polys.py`*: `hermite()` (#20297), `jacobi_P()` (#22326), `laguerre()` (#16813), `legendre_P/Q()` (#17151), `ultraspherical()` (#20428)
 * *`functions/piecewise.py`*: `Piecewise.convolution()`
 * *`matrix/matrix1.pyx`*: `Matrix._maxima_init_()`
 * *`matrix/matrix_symbolic_dense.pyx`*: `Matrix_symbolic_dense.exp()` 
 * *`structure/sage_object.pyx`*: `SageObject._maxima_()`, `_maxima_init_()`
 * *`symbolic/assumptions.py`*: `GenericDeclaration.assume()`
-* *`symbolic/expression.pyx`*: `Ex.assume()`, `forget()`, `assume_str()`, `assert()`, `expand_trig()`, `reduce_trig()`, `coefficients()` ([#20455](https://trac.sagemath.org/ticket/20455)), `poly()` ([#20455](https://trac.sagemath.org/ticket/20455)), `maxima_methods()`, `rectform()`, `simplify()`, `simplify_real()`, `simplify_rational()` ([#21335](https://trac.sagemath.org/ticket/21335)), `simplify_log()`, `expand_log()`, `factor()` ([#23835](https://trac.sagemath.org/ticket/23835)), `solve()`, `sum()`
+* *`symbolic/expression.pyx`*: `Ex.assume()`, `forget()`, `assume_str()`, `assert()`, `expand_trig()`, `reduce_trig()`, `coefficients()` (#20455), `poly()` (#20455), `maxima_methods()`, `rectform()`, `simplify()`, `simplify_real()`, `simplify_rational()` (#21335), `simplify_log()`, `expand_log()`, `factor()` (#23835), `solve()`, `sum()`
 * *`symbolic/maxima_wrapper.py`*: *
 * *`calculus/calculus.py`*: `symbolic_expression_from_maxima_string()` called by `factor()` and indirectly by  `solve()`
 
@@ -24,8 +24,8 @@
 * *`functions/other.py`*:
 * *`functions/log.py`*:
 * *`functions/piecewise.py`*: Piecewise.critical_points()
-* *`functions/special.py`*: spherical_hankel1/2(), spherical_harmonic ([#15024](https://trac.sagemath.org/ticket/15024), [#20939](https://trac.sagemath.org/ticket/20939))
+* *`functions/special.py`*: spherical_hankel1/2(), spherical_harmonic (#15024, #20939)
 * *`matrix/matrix_symbolic_dense.pyx`*: Matrix_symbolic_dense.eigenvalues(), eigenvectors_left(), exp(), charpoly(), simplify_trig(), simplify_rational(), factor(), 
 * *`schemes/projective/projective_morphism.py`*: SchemeMorphism_polynomial_projective_space.dynatomic_polynomial()
-* *`symbolic/expression.pyx`*: Expression._maxima_(), taylor(), combine() ([#21034](https://trac.sagemath.org/ticket/21034)), partial_fraction() ([#25645](https://trac.sagemath.org/ticket/25645)), simplify_hypergeometric(), simplify_factorial(), canonicalize_radical()
+* *`symbolic/expression.pyx`*: Expression._maxima_(), taylor(), combine() (#21034), partial_fraction() (#25645), simplify_hypergeometric(), simplify_factorial(), canonicalize_radical()
 * *`symbolic/relation.py`*: test_relation_maxima(), solve(), solve_ineq_univar(), solve_ineq_fourier()

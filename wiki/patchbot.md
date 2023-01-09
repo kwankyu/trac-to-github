@@ -51,18 +51,18 @@ The color of the report page icon indicates the status of the ticket. See the re
 
 It is safer to run the patchbot in an unused sage install.
 
-[This is the Trac macro *span* that was inherited from the migration called with arguments (style=background: )](https://trac.sagemath.org/wiki/WikiMacros#span-macro)
+[[span(style=background: #FFFF66,① Install the patchbot using **pip3 install --user git+https://github.com/sagemath/sage-patchbot.git**)]]
 
 or using PyPI:
 
-[This is the Trac macro *span* that was inherited from the migration called with arguments (style=background:)](https://trac.sagemath.org/wiki/WikiMacros#span-macro)
+[[span(style=background:#FFFF66,① Install the patchbot using **pip3 install --user sage-patchbot**)]]
 
 
 Dependencies: shell commands **git**; **tar**; **wget**
 
 **pyflakes** and **pycodestyle** will be installed by pip if not already installed.
 
-[This is the Trac macro *span* that was inherited from the migration called with arguments (style=background:)](https://trac.sagemath.org/wiki/WikiMacros#span-macro)
+[[span(style=background:#98FF98,Please set the --owner option if you run a patchbot. It is useful to know whom to contact.)]]
 
 You can instead register [here](patchbot-owners).
 
@@ -85,7 +85,7 @@ Before running the patchbot make sure that the following two commands produce no
     ./sage -t --all --long
 ```
 
-[This is the Trac macro *span* that was inherited from the migration called with arguments (style=background:)](https://trac.sagemath.org/wiki/WikiMacros#span-macro)
+[[span(style=background:#FFFF66,② Run the patchbot using **python3 -m sage_patchbot.patchbot --sage-root HERE_PATH --owner HERE_NAME**)]]
 
 The patchbot should be run with **pip3** and **python3**. The version of Python must be at least 3.7.
 
@@ -276,4 +276,4 @@ Instead of the default platform, `ubuntu-focal-standard`, you can select any pla
 
 It will run for 6 hours, then exit. You can run multiple workflows simultaneously.
 
-See also [#33253](https://trac.sagemath.org/ticket/33253).
+See also #33253.

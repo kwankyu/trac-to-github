@@ -48,6 +48,10 @@ See also: https://trac.sagemath.org/ticket/30363
       git remote add upstream https://github.com/sagemath/sage.git   # https
       git remote add upstream git@github.com:sagemath/sage.git       # ssh
       ```
+   - In order to be able to fetch branches from existing Trac tickets, also set up the following (read-only) remote:
+     ```
+     git remote add trac https://github.com/sagemath/sagetrac-mirror.git
+     ```
   - (Of course, you can give arbitrary names to your git remotes, but `origin` and `upstream` are the established defaults, which will make it easier to use tools such as the GitHub command-line tools.)
 
 - For reporting a bug, planning an enhancement, describing a project, **instead of opening a Trac ticket**:
@@ -70,6 +74,10 @@ See also: https://trac.sagemath.org/ticket/30363
       - [marking as duplicate](https://docs.github.com/en/issues/tracking-your-work-with-issues/marking-issues-or-pull-requests-as-a-duplicate), 
       - "Labels" "duplicate", "invalid", "wontfix", or
       - closing with a comment.
+    - **Dependencies**: Use the phrase "Depends on ", followed by the Issue or PR reference.
+      Repeat this in separate lines if there is more than one dependency.
+      This format is understood by various dependency managers: See https://www.dpulls.com/,
+      https://github.com/z0al/dependent-issues, https://github.com/gregsdennis/dependencies-action/pull/5
 
 - For contributing a change that does not address an existing open Issue, **instead of opening a Trac ticket and pushing a git branch to it**:
   - Create a new local branch based on `upstream/develop`
@@ -144,22 +152,7 @@ Preview of the converted issues:
 Preview of the converted wiki: https://github.com/sagemath/trac_to_gh/wiki
 
 Switchover day (date to be determined; proposed: Feb 1, 2023):
-1. Make Trac read-only:
-   - Take Trac offline, 
-   - Reconfigure Trac ticket system, Trac wiki to be read-only
-   - Make sure Trac git repo is fully synced to https://github.com/sagemath/sagetrac-mirror and [archive](https://docs.github.com/en/repositories/archiving-a-github-repository) that (= set it to readonly).
-   - Make Trac git repo read-only
-   - Bring Trac online.
-2. Convert all tickets to Issues in a new repo sagemath/sage-temp via a migration archive. (This preserves the ticket numbers as Issue numbers.)
-~~3. Rename sagemath/sagetrac-mirror to sagemath/sagetrac-archive~~
-3. [Archive](https://docs.github.com/en/repositories/archiving-a-github-repository) sagemath/sagetrac-mirror (= set it to readonly).
-~~4. (Optional:) Create a single-branch fork of sagemath/sage-temp called sagemath/sagetrac-mirror and push all branches (or all branches of open tickets) from sagemath/sagetrac-archive to it. Open PRs from [sagemath/sagetrac-mirror](https://github.com/sagemath/sagetrac-mirror) to sagemath/sage-temp for all open tickets with attached branches.~~
-5. Final check that the new repo sagemath/sage-temp is OK.
-6. [Rename](https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository) [sagemath/sage](https://github.com/sagemath/sage) to sagemath/sage-old.
-7. Rename the new repo sagemath/sage-temp to sagemath/sage. ([Yes, this will work and will break the redirect](https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository) sagemath/sage -> sagemath/sage-old.)
-8. [Transfer](https://docs.github.com/en/issues/tracking-your-work-with-issues/transferring-an-issue-to-another-repository) the existing (few) issues from sagemath/sage-old to sagemath/sage.
-9. Announce that sagemath/sage is now open for Issues and PRs.
-
+- Steps see https://github.com/sagemath/trac-to-github/issues/73
 
 # Retrieving data from GitHub
 

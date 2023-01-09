@@ -57,6 +57,9 @@ from migration_archive_writer import MigrationArchiveWritingRequester
 import markdown
 from markdown.extensions.tables import TableExtension
 
+from rich.console import Console
+from rich.table import Table
+
 #import github as gh
 #gh.enable_console_debug_logging()
 
@@ -119,6 +122,9 @@ trac_url_ticket = os.path.join(trac_url_dir, 'ticket')
 trac_url_wiki = os.path.join(trac_url_dir, 'wiki')
 trac_url_query = os.path.join(trac_url_dir, 'query')
 trac_url_report = os.path.join(trac_url_dir, 'report')
+trac_url_attachment = os.path.join(trac_url_dir, 'attachment')
+
+keep_trac_ticket_references = config.getboolean('source', 'keep_trac_ticket_references')
 
 if config.has_option('target', 'issues_repo_url'):
     target_url_issues_repo = config.get('target', 'issues_repo_url')
@@ -162,15 +168,22 @@ except ValueError:
     keywords_to_labels = ast.literal_eval(config.get('issues', 'keywords_to_labels'))
 migrate_milestones = config.getboolean('issues', 'migrate_milestones')
 add_label = None
+
 if config.has_option('issues', 'add_label'):
     add_label = config.get('issues', 'add_label')
 
 attachment_export = config.getboolean('attachments', 'export')
-if attachment_export :
+if attachment_export:
     attachment_export_dir = config.get('attachments', 'export_dir')
-    attachment_export_url = config.get('attachments', 'export_url')
-    if not attachment_export_url.endswith('/') :
-        attachment_export_url += '/'
+    if config.has_option('attachments', 'export_url'):
+        attachment_export_url = config.get('attachments', 'export_url')
+        if not attachment_export_url.endswith('/') :
+            attachment_export_url += '/'
+    else:
+        attachment_export_url = target_url_issues_repo
+        if not attachment_export_url.endswith('/') :
+            attachment_export_url += '/'
+        attachment_export_url += 'files/'
 
 must_convert_wiki = config.getboolean('wiki', 'migrate')
 wiki_export_dir = None
@@ -199,6 +212,27 @@ matcher_changeset2 = re.compile(pattern_changeset2)
 gh_labels = dict()
 gh_user = None
 
+closing_commits = {}  # (src_ticket_id, commit) -> closing_commit
+
+def read_closing_commits():
+    # Generated using write-closing-commits.sh
+    if os.path.exists('closing_commits.txt'):
+        with open('closing_commits.txt', 'r') as f:
+            for line_number, line in enumerate(f.readlines(), start=1):
+                if m := re.match('^([0-9a-f]{40}) Merge: ([0-9a-f]{40}) ([0-9a-f]{40}) Trac #([0-9]+):', line):
+                    sha = m.group(1)
+                    parent2_sha = m.group(3)
+                    src_ticket_id = int(m.group(4))
+                    try:
+                        other_sha = closing_commits[src_ticket_id, parent2_sha]
+                    except KeyError:
+                        pass
+                    else:
+                        log.warning(f'closing_commits.txt:{line_number}: multiple commits for ticket #{src_ticket_id} {parent2_sha}: {other_sha}, {sha}')
+                    closing_commits[src_ticket_id, parent2_sha] = sha
+                elif line:
+                    log.warning(f'closing_commits.txt:{line_number}: malformed line')
+
 # The file wiki_path_conversion_table.txt is created if not exists. If it
 # exists, the table below is constructed from the data in the file.
 create_wiki_link_conversion_table = False
@@ -211,6 +245,20 @@ if os.path.exists('wiki_path_conversion_table.txt'):
 elif must_convert_wiki:
     create_wiki_link_conversion_table = True
 
+RE_CAMELCASE1 = re.compile(r'(?<=\s)((?:[A-Z][a-z0-9]+){2,})(?=[\s\.\,\:\;\?\!])')
+RE_CAMELCASE2 = re.compile(r'(?<=\s)((?:[A-Z][a-z0-9]+){2,})$')
+RE_HEADING1 = re.compile(r'^(=)\s(.+)\s=\s*([\#][^\s]*)?')
+RE_HEADING2 = re.compile(r'^(==)\s(.+)\s==\s*([\#][^\s]*)?')
+RE_HEADING3 = re.compile(r'^(===)\s(.+)\s===\s*([\#][^\s]*)?')
+RE_HEADING4 = re.compile(r'^(====)\s(.+)\s====\s*([\#][^\s]*)?')
+RE_HEADING5 = re.compile(r'^(=====)\s(.+)\s=====\s*([\#][^\s]*)?')
+RE_HEADING6 = re.compile(r'^(======)\s(.+)\s======\s*([\#][^\s]*)?')
+RE_HEADING1a = re.compile(r'^(=)\s([^#]+)([\#][^\s]*)?')
+RE_HEADING2a = re.compile(r'^(==)\s([^#]+)([\#][^\s]*)?')
+RE_HEADING3a = re.compile(r'^(===)\s([^#]+)([\#][^\s]*)?')
+RE_HEADING4a = re.compile(r'^(====)\s([^#]+)([\#][^\s]*)?')
+RE_HEADING5a = re.compile(r'^(=====)\s([^#]+)([\#][^\s]*)?')
+RE_HEADING6a = re.compile(r'^(======)\s([^#]+)([\#][^\s]*)?')
 RE_SUPERSCRIPT1 = re.compile(r'\^([^\s]+?)\^')
 RE_SUBSCRIPT1 = re.compile(r',,([^\s]+?),,')
 RE_IMAGE1 = re.compile(r'\[\[Image\(source:([^(]+)\)\]\]')
@@ -239,14 +287,24 @@ RE_TICKET1 = re.compile(r'[\s]%s/([1-9]\d{0,4})' % trac_url_ticket)
 RE_TICKET2 = re.compile(r'\#([1-9]\d{0,4})')
 RE_COMMENT1 = re.compile(r'\[comment:([1-9]\d*)\s+(.*?)\]')
 RE_COMMENT2 = re.compile(r'(?<=\s)comment:([1-9]\d*)')  # need to exclude the string as part of http url
-RE_TICKET_COMMENT1 = re.compile(r'ticket:([1-9]\d*)#comment:([1-9]\d*)')
-RE_COLOR = re.compile(r'<span style="color: ([a-zA-Z]+)">([a-zA-Z]+)</span>')
-RE_RULE = re.compile(r'^[-]{4,}\s*')
-RE_CAMELCASE1 = re.compile(r'(?<=\s)((?:[A-Z][a-z0-9]+){2,})(?=[\s\.\,\:\;\?\!])')
-RE_CAMELCASE2 = re.compile(r'(?<=\s)((?:[A-Z][a-z0-9]+){2,})$')
+RE_TICKET_COMMENT1 = re.compile(r'\[ticket:([1-9]\d*)#comment:([1-9]\d*)\s+(.*?)\]')
+RE_TICKET_COMMENT2 = re.compile(r'ticket:([1-9]\d*)#comment:([1-9]\d*)')
+RE_ATTACHMENT1 = re.compile(r'\[attachment:([^\s\|]+)[\s\|](.+)\]')
+RE_ATTACHMENT2 = re.compile(r'\[attachment:([^\s]+)\]')
+RE_ATTACHMENT3 = re.compile(r'(?<=\s)attachment:([^\s]+)\.\s')
+RE_ATTACHMENT4 = re.compile(r'^attachment:([^\s]+)\.\s')
+RE_ATTACHMENT5 = re.compile(r'(?<=\s)attachment:([^\s]+)')
+RE_ATTACHMENT6 = re.compile(r'^attachment:([^\s]+)')
 RE_UNDERLINED_CODE1 = re.compile(r'(?<=\s)_([a-zA-Z_]+)_(?=[\s,)])')
 RE_UNDERLINED_CODE2 = re.compile(r'(?<=\s)_([a-zA-Z_]+)_$')
 RE_UNDERLINED_CODE3 = re.compile(r'^_([a-zA-Z_]+)_(?=\s)')
+RE_CODE_SNIPPET = re.compile(r'(?<!`){{{(.*?)}}}')
+RE_GITHUB_MENTION1 = re.compile('(?<=\s)@([a-zA-Z][a-zA-Z0-9.]*[a-zA-Z0-9])')
+RE_GITHUB_MENTION2 = re.compile('^@([a-zA-Z][a-zA-Z0-9.]*[a-zA-Z0-9])')
+RE_RULE = re.compile(r'^[-]{4,}\s*')
+RE_NO_CAMELCASE = re.compile(r'\!(([A-Z][a-z0-9]+){2,})')
+RE_COLOR = re.compile(r'<span style="color: ([a-zA-Z]+)">([a-zA-Z]+)</span>')
+RE_TRAC_REPORT = re.compile(r'\[report:([0-9]+)\s*(.*?)\]')
 RE_COMMIT_LIST1 = re.compile(r'\|\[(.+?)\]\((.*)\)\|<code>(.*?)</code>\|')
 RE_COMMIT_LIST2 = re.compile(r'\|\[(.+?)\]\((.*)\)\|`(.*?)`\|')
 RE_COMMIT_LIST3 = re.compile(r'\|(.*?)\|(.*?)\|')
@@ -254,8 +312,6 @@ RE_NEW_COMMITS = re.compile(r'(?sm)(New commits:)\n((?:\|[^\n]*\|(?:\n|$))+)')
 RE_LAST_NEW_COMMITS = re.compile(r'(?sm)(Last \d+ new commits:)\n((?:\|[^\n]*\|(?:\n|$))+)')
 RE_BRANCH_FORCED_PUSH = re.compile(r'^(Branch pushed to git repo; I updated commit sha1[.] This was a forced push[.])')
 RE_BRANCH_PUSH = re.compile(r'^(Branch pushed to git repo; I updated commit sha1( and set ticket back to needs_review)?[.])')
-
-RE_TRAC_REPORT = re.compile(r'\[report:([0-9]+)\s*(.*?)\]')
 
 def convert_wiki_link(match):
     trac_path = match.group(1)
@@ -372,67 +428,143 @@ def convert_git_link_patch(match):
 def convert_git_link(match):  # catch all missed git link
     import pdb; pdb.set_trace()
 
+def inline_code_snippet(match):
+    code = match.group(1)
+    code = code.replace('@', 'AT__SIGN__IN__CODE')
+    if '`' in code:
+        return '<code>' + code.replace('`', r'\`') + '</code>'
+    else:
+        return '`' + code + '`'
+
+def convert_ticket_attachment(match):
+    ticket_id = match.group(1)
+    filename = match.group(2)
+    if keep_trac_ticket_references:
+        return os.path.join(trac_url_attachment, 'ticket', ticket_id, filename)
+    return gh_attachment_url(ticket_id, filename)
+
+def convert_replying_to(match):
+    comment_id = match.group(1)
+    username = match.group(2)
+    name = convert_trac_username(username)
+    if name:  # github username
+        name = '@' + name
+    else:
+        name = username
+
+    return 'Replying to [comment:{} {}]'.format(comment_id, name)
+
+RE_SAGE_TICKET1 = re.compile(r'https?://trac\.sagemath\.org/ticket/(\d+)#comment:(\d+)?')
+RE_SAGE_TICKET2 = re.compile(r'https?://trac\.sagemath\.org/sage_trac/ticket/(\d+)')
+RE_SAGE_WIKI1= re.compile(r'https?://trac\.sagemath\.org/wiki/([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_ATTACHMENT1 = re.compile(r'https?://trac\.sagemath\.org/attachment/ticket/(\d+)/([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_ATTACHMENT2 = re.compile(r'https?://trac\.sagemath\.org/sage_trac/attachment/ticket/(\d+)/([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_ATTACHMENT3= re.compile(r'https?://trac\.sagemath\.org/sage_trac/raw-attachment/ticket/(\d+)/([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_DIFF1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/([/\-\w0-9@:%._+~#=]+)\?id=([0-9a-f]+)')
+RE_SAGE_GIT_DIFF2 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/?\?h=([/\-\w0-9@:%._+~#=]+)&id2=([0-9a-f]+)')
+RE_SAGE_GIT_DIFF3 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id2?=([0-9a-f]+)&id=([0-9a-f]+)')
+RE_SAGE_GIT_DIFF4 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id=([0-9a-f]+)')
+RE_SAGE_GIT_DIFF5 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/?([/\-\w0-9@:%._+~#=]+)\?h=([/\-\w0-9@:%._+~#=]+)&id=([0-9a-f]+)')
+RE_SAGE_GIT_DIFF6 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id2=([/\-\w0-9@:%._+~#=]+)&id=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_DIFF7 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/?\?h=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_DIFF8 = re.compile(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_COMMIT1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commit/?\?h=([/\-\w0-9@:%._+~#=]+)&id=([0-9a-f]+)')
+RE_SAGE_GIT_COMMIT2 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commitid=([0-9a-f]+)')
+RE_SAGE_GIT_COMMIT3 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commit/?\?id=([0-9a-f]+)')
+RE_SAGE_GIT_COMMIT4 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commit/?\?h=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_COMMIT5 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commit/?\?id=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_COMMIT6 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commit/([/\-\w0-9@:%._+~#=]+)\?h=([/\-\w0-9@:%._+~#=]+)&id=([0-9a-f]+)')
+RE_SAGE_GIT_COMMIT7 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commit/([/\-\w0-9@:%._+~#=]+)\?id=([0-9a-f]+)')
+RE_SAGE_GIT_COMMIT8 = re.compile(r'https?://git\.sagemath\.org/sage\.git/commit/([/\-\w0-9@:%._+~#=]+)\?h=([0-9a-f]+)')
+RE_SAGE_GIT_TREE1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/tree/([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_TREE2 = re.compile(r'https?://git\.sagemath\.org/sage\.git/tree/?\?h=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_TREE3 = re.compile(r'https?://git\.sagemath\.org/sage\.git/tree/src/?')
+RE_SAGE_GIT_LOG1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/log/?\?h=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_LOG2 = re.compile(r'https?://git\.sagemath\.org/sage\.git/log/?\?q=([0-9a-f]+)..([0-9a-f]+)&h=([0-9a-f]+)&qt=range')
+RE_SAGE_GIT_LOG3 = re.compile(r'https?://git\.sagemath\.org/sage\.git/log/?([/\-\w0-9@:%._+~#=]+)\?h=([0-9a-f]+)')
+RE_SAGE_GIT_LOG4 = re.compile(r'https?://git\.sagemath\.org/sage\.git/log/?([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_PLAIN1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/plain/([/\-\w0-9@:%._+~#=]+)\?h=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT_PATCH1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/patch/?\?id=([0-9a-f]+)')
+RE_SAGE_GIT_REFS1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/refs/?')
+RE_SAGE_GIT_TAG1 = re.compile(r'https?://git\.sagemath\.org/sage\.git/tag/?\?id=([/\-\w0-9@:%._+~#=]+)')
+RE_SAGE_GIT = re.compile(r'https?://git\.sagemath\.org/sage\.git/(.*)')
+RE_SAGE_WRONG_FORMAT1 = re.compile(r'comment:(\d+):ticket:(\d+)')
+RE_SAGE_REPLYING_TO = re.compile(r'Replying to \[comment:(\d+)\s([\-\w0-9@._]+)\]')
+
 def project_specific_normalization(text, conv_help):
 
-    text = re.sub(r'https?://trac\.sagemath\.org/ticket/(\d+)#comment:(\d+)?', r'ticket:\1#comment:\2', text)
-    text = re.sub(r'https?://trac\.sagemath\.org/wiki/([/\-\w0-9@:%._+~#=]+)', convert_wiki_link, text)
-
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/([/\-\w0-9@:%._+~#=]+)\?id=([0-9a-f]+)',
-                  convert_git_link_diff1, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/?\?h=([/\-\w0-9@:%._+~#=]+)&id2=([0-9a-f]+)',
-                  convert_git_link_diff2, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id2?=([0-9a-f]+)&id=([0-9a-f]+)',
-                  convert_git_link_diff3, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id=([0-9a-f]+)',
-                  convert_git_link_diff4, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/?([/\-\w0-9@:%._+~#=]+)\?h=([/\-\w0-9@:%._+~#=]+)&id=([0-9a-f]+)',
-                  convert_git_link_diff5, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id2=([/\-\w0-9@:%._+~#=]+)&id=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_diff6, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/?\?h=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_diff7, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/diff/?\?id=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_diff8, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commit/?\?h=([/\-\w0-9@:%._+~#=]+)&id=([0-9a-f]+)',
-                  convert_git_link_commit1, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commitid=([0-9a-f]+)',  # misspelled
-                  convert_git_link_commit3, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commit/?\?id=([0-9a-f]+)',
-                  convert_git_link_commit3, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commit/?\?h=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_commit4, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commit/?\?id=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_commit5, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commit/([/\-\w0-9@:%._+~#=]+)\?h=([/\-\w0-9@:%._+~#=]+)&id=([0-9a-f]+)',
-                  convert_git_link_commit6, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commit/([/\-\w0-9@:%._+~#=]+)\?id=([0-9a-f]+)',
-                  convert_git_link_commit7, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/commit/([/\-\w0-9@:%._+~#=]+)\?h=([0-9a-f]+)',
-                  convert_git_link_commit7, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/tree/([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_tree1, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/tree/?\?h=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_tree3, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/log/?\?h=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_log1, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/log/?\?q=([0-9a-f]+)..([0-9a-f]+)&h=([0-9a-f]+)&qt=range',
-                  convert_git_link_log3, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/log/?([/\-\w0-9@:%._+~#=]+)\?h=([0-9a-f]+)',
-                  convert_git_link_log4, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/log/?([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_log5, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/plain/([/\-\w0-9@:%._+~#=]+)\?h=([/\-\w0-9@:%._+~#=]+)',
-                  convert_git_link_plain, text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/patch/?\?id=([0-9a-f]+)',
-                  convert_git_link_patch, text)
-
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/refs/?', r'{target_url_git_repo}/branches', text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/tag/?\?id=([/\-\w0-9@:%._+~#=]+)', r'{target_url_git_repo}/releases/tag/\1', text)
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/tree/src/?', r'{target_url_git_repo}/blob/master/src', text)
-
-    text = re.sub(r'https?://git\.sagemath\.org/sage\.git/(.*)', convert_git_link, text)
+    text = RE_SAGE_TICKET1.sub(r'ticket:\1#comment:\2', text)
+    text = RE_SAGE_TICKET2.sub(r'%s/issues/\1' % target_url_issues_repo, text)
+    text = RE_SAGE_WIKI1.sub(convert_wiki_link, text)
+    text = RE_SAGE_ATTACHMENT1.sub(convert_ticket_attachment, text)
+    text = RE_SAGE_ATTACHMENT2.sub(convert_ticket_attachment, text)
+    text = RE_SAGE_ATTACHMENT3.sub(convert_ticket_attachment, text)
+    text = RE_SAGE_GIT_DIFF1.sub(convert_git_link_diff1, text)
+    text = RE_SAGE_GIT_DIFF2.sub(convert_git_link_diff2, text)
+    text = RE_SAGE_GIT_DIFF3.sub(convert_git_link_diff3, text)
+    text = RE_SAGE_GIT_DIFF4.sub(convert_git_link_diff4, text)
+    text = RE_SAGE_GIT_DIFF5.sub(convert_git_link_diff5, text)
+    text = RE_SAGE_GIT_DIFF6.sub(convert_git_link_diff6, text)
+    text = RE_SAGE_GIT_DIFF7.sub(convert_git_link_diff7, text)
+    text = RE_SAGE_GIT_DIFF8.sub(convert_git_link_diff8, text)
+    text = RE_SAGE_GIT_COMMIT1.sub(convert_git_link_commit1, text)
+    text = RE_SAGE_GIT_COMMIT2.sub(convert_git_link_commit3, text)  # misspelled
+    text = RE_SAGE_GIT_COMMIT3.sub(convert_git_link_commit3, text)
+    text = RE_SAGE_GIT_COMMIT4.sub(convert_git_link_commit4, text)
+    text = RE_SAGE_GIT_COMMIT5.sub(convert_git_link_commit5, text)
+    text = RE_SAGE_GIT_COMMIT6.sub(convert_git_link_commit6, text)
+    text = RE_SAGE_GIT_COMMIT7.sub(convert_git_link_commit7, text)
+    text = RE_SAGE_GIT_COMMIT8.sub(convert_git_link_commit7, text)
+    text = RE_SAGE_GIT_TREE1.sub(convert_git_link_tree1, text)
+    text = RE_SAGE_GIT_TREE2.sub(convert_git_link_tree3, text)
+    text = RE_SAGE_GIT_TREE3.sub(r'%s/blob/master/src' % target_url_git_repo, text)
+    text = RE_SAGE_GIT_LOG1.sub(convert_git_link_log1, text)
+    text = RE_SAGE_GIT_LOG2.sub(convert_git_link_log3, text)
+    text = RE_SAGE_GIT_LOG3.sub(convert_git_link_log4, text)
+    text = RE_SAGE_GIT_LOG4.sub(convert_git_link_log5, text)
+    text = RE_SAGE_GIT_PLAIN1.sub(convert_git_link_plain, text)
+    text = RE_SAGE_GIT_PATCH1.sub(convert_git_link_patch, text)
+    text = RE_SAGE_GIT_REFS1.sub(r'%s/branches' % target_url_git_repo, text)
+    text = RE_SAGE_GIT_TAG1.sub(r'%s/releases/tag/\1' % target_url_git_repo, text)
+    text = RE_SAGE_GIT.sub(convert_git_link, text)  # catch all missed
+    text = RE_SAGE_WRONG_FORMAT1.sub(r'ticket:\2#comment:\1', text)
+    text = RE_SAGE_REPLYING_TO.sub(convert_replying_to, text)
 
     return text
+
+def commits_list(match):
+    t = '**' + match.group(1) +'**\n'
+    t += '<table>'
+    for c in match.group(2).split('\n')[2:]:  # the first two are blank header
+        if not c:
+            continue
+        m = RE_COMMIT_LIST1.match(c)
+        if m:
+            commit_id = m.group(1)
+            commit_url = m.group(2)
+            commit_msg = m.group(3).replace('\`', '`')
+            t += r'<tr><td><a href="{}">{}</a></td><td><code>{}</code></td></tr>'.format(commit_url, commit_id, commit_msg)
+        else:
+            m = RE_COMMIT_LIST2.match(c)
+            if m:
+                commit_id = m.group(1)
+                commit_url = m.group(2)
+                commit_msg = m.group(3)
+                t += r'<tr><td><a href="{}">{}</a></td><td><code>{}</code></td></tr>'.format(commit_url, commit_id, commit_msg)
+            else: # unusual format
+                m = RE_COMMIT_LIST3.match(c)
+                commit_id = m.group(1)
+                commit_msg = m.group(2)
+                t += r'<tr><td>{}</td><td><code>{}</code></td></tr>'.format(commit_id, commit_msg)
+    t += '</table>\n'
+    return t
+
+def github_mention(match):
+    username = match.group(1)
+    github_username = convert_trac_username(username)
+    if github_username:
+        return '@' + github_username
+    return '`@`' + username
 
 def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
 
@@ -487,20 +619,6 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
         non_blank_previous_line = bool(line)
         line = text_lines.pop()
 
-        # heading
-        line = re.sub(r'^(=)\s(.+)\s=\s*([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(==)\s(.+)\s==\s*([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(===)\s(.+)\s===\s*([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(====)\s(.+)\s====\s*([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(=====)\s(.+)\s=====\s*([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(======)\s(.+)\s======\s*([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(=)\s([^#]+)([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(==)\s([^#]+)([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(===)\s([^#]+)([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(====)\s([^#]+)([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(=====)\s([^#]+)([\#][^\s]*)?', heading_replace, line)
-        line = re.sub(r'^(======)\s([^#]+)([\#][^\s]*)?' , heading_replace, line)
-
         # cut quote prefix
         if line.startswith(quote_prefix):
             line = line[len(quote_prefix):]
@@ -509,17 +627,19 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
                 text_lines.append(quote_prefix + '}}}')
                 continue
 
-            line = '\n' + line
+            if line:
+                a.append('')  # effectively insert a blank line when quote depth decreases
             quote_prefix = ''
 
         if not (in_code or in_html):
             # quote
-            m = re.match('^(>[>\s]*)', line)
+            prefix = ''
+            m = re.match('^((?:>\s)*>\s)', line)
             if m:
-                prefix = m.group(0)
-                l = len(prefix)
-            else:
-                prefix = ''
+                prefix += m.group(1)
+            m = re.match('^(>[>\s]*)', line[len(prefix):])
+            if m:
+                prefix += m.group(1)
             quote_prefix += prefix
             line = line[len(prefix):]
 
@@ -660,6 +780,21 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
             line = new_line
 
         if not (in_code or in_html):
+            # heading
+            line = re.sub(r'^(\s*)# ', r'\1\# ', line)  # first fix unintended heading
+            line = RE_HEADING1.sub(heading_replace, line)
+            line = RE_HEADING2.sub(heading_replace, line)
+            line = RE_HEADING3.sub(heading_replace, line)
+            line = RE_HEADING4.sub(heading_replace, line)
+            line = RE_HEADING5.sub(heading_replace, line)
+            line = RE_HEADING6.sub(heading_replace, line)
+            line = RE_HEADING1a.sub(heading_replace, line)
+            line = RE_HEADING2a.sub(heading_replace, line)
+            line = RE_HEADING3a.sub(heading_replace, line)
+            line = RE_HEADING4a.sub(heading_replace, line)
+            line = RE_HEADING5a.sub(heading_replace, line)
+            line = RE_HEADING6a.sub(heading_replace, line)
+
             line = RE_SUPERSCRIPT1.sub(r'<sup>\1</sup>', line)  # superscript ^abc^
             line = RE_SUBSCRIPT1.sub(r'<sub>\1</sub>', line)  # subscript ,,abc,,
 
@@ -697,34 +832,25 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
             line = RE_COMMENT2.sub(r'OPENING__LEFT__BRACKETcomment:\1CLOSING__RIGHT__BRACKET(#comment%3A\1)', line)
 
             line = RE_TICKET_COMMENT1.sub(conv_help.ticket_comment_link, line)
+            line = RE_TICKET_COMMENT2.sub(conv_help.ticket_comment_link, line)
+
+            line = RE_ATTACHMENT1.sub(conv_help.ticket_attachment, line)
+            line = RE_ATTACHMENT2.sub(conv_help.ticket_attachment, line)
+            line = RE_ATTACHMENT3.sub(conv_help.ticket_attachment, line)
+            line = RE_ATTACHMENT4.sub(conv_help.ticket_attachment, line)
+            line = RE_ATTACHMENT5.sub(conv_help.ticket_attachment, line)
+            line = RE_ATTACHMENT6.sub(conv_help.ticket_attachment, line)
 
             # code surrounded by underline, mistaken as italics by github
             line = RE_UNDERLINED_CODE1.sub(r'`_\1_`', line)
             line = RE_UNDERLINED_CODE2.sub(r'`_\1_`', line)
             line = RE_UNDERLINED_CODE3.sub(r'`_\1_`', line)
 
-            # inline code snippets
-            def inline_code_snippet(match):
-                code = match.group(1)
-                code = code.replace('@', 'AT__SIGN__IN__CODE')
-                if '`' in code:
-                    return '<code>' + code.replace('`', r'\`') + '</code>'
-                else:
-                    return '`' + code + '`'
-
-            line = re.sub(r'(?<!`){{{(.*?)}}}', inline_code_snippet, line)
-
-            def github_mention(match):
-                trac_user = match.group(1)
-                if trac_user in users_map:
-                    github_user = users_map[trac_user]
-                    if github_user:
-                        return '@' + github_user
-                return '`@`' + trac_user
+            line = RE_CODE_SNIPPET.sub(inline_code_snippet, line)
 
             # to avoid unintended github mention
-            line = re.sub('(?<=\s)@([a-zA-Z][a-zA-Z.]*)', github_mention, line)
-            line = re.sub('^@([a-zA-Z][a-zA-Z.]*)', github_mention, line)
+            line = RE_GITHUB_MENTION1.sub(github_mention, line)
+            line = RE_GITHUB_MENTION2.sub(github_mention, line)
 
             if RE_RULE.match(line):
                 if not a or not a[-1].strip():
@@ -732,7 +858,7 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
                 else:
                     line = '\n---'
 
-            line = re.sub(r'\!(([A-Z][a-z0-9]+){2,})', r'\1', line)  # no CamelCase wiki link because of leading "!"
+            line = RE_NO_CAMELCASE.sub(r'\1', line)  # no CamelCase wiki link because of leading "!"
 
             # convert a trac table to a github table
             if line.startswith('||'):
@@ -872,8 +998,8 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
                 table_text = '\n'.join(table)
                 if 'OPENING__PROCESSOR__TD' in table_text:
                     html = markdown.markdown(table_text, extensions=[TableExtension(use_align_attribute=True)])
-                    html = re.sub('OPENING__PROCESSOR__TD', r'<div align="left">', html)
-                    html = re.sub('CLOSING__PROCESSOR__TD', r'</div>', html)
+                    html = html.replace('OPENING__PROCESSOR__TD', r'<div align="left">')
+                    html = html.replace('CLOSING__PROCESSOR__TD', r'</div>')
                 else:
                     html = table_text
                 line = html.replace('NEW__LINE', '\n') + '\n' + line
@@ -898,33 +1024,6 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
     text = RE_COLOR.sub(r'$\\textcolor{\1}{\\text{\2}}$', text)
     text = RE_TRAC_REPORT.sub(r'[Trac report of id \1 inherited from the migration](%s/\1)' % trac_url_report, text)
 
-    def commits_list(match):
-        t = '**' + match.group(1) +'**\n'
-        t += '<table>'
-        for c in match.group(2).split('\n')[2:]:  # the first two are blank header
-            if not c:
-                continue
-            m = RE_COMMIT_LIST1.match(c)
-            if m:
-                commit_id = m.group(1)
-                commit_url = m.group(2)
-                commit_msg = m.group(3).replace('\`', '`')
-                t += r'<tr><td><a href="{}">{}</a></td><td><code>{}</code></td></tr>'.format(commit_url, commit_id, commit_msg)
-            else:
-                m = RE_COMMIT_LIST2.match(c)
-                if m:
-                    commit_id = m.group(1)
-                    commit_url = m.group(2)
-                    commit_msg = m.group(3)
-                    t += r'<tr><td><a href="{}">{}</a></td><td><code>{}</code></td></tr>'.format(commit_url, commit_id, commit_msg)
-                else: # unusual format
-                    m = RE_COMMIT_LIST3.match(c)
-                    commit_id = m.group(1)
-                    commit_msg = m.group(2)
-                    t += r'<tr><td>{}</td><td><code>{}</code></td></tr>'.format(commit_id, commit_msg)
-        t += '</table>\n'
-        return t
-
     text = RE_NEW_COMMITS.sub(commits_list, text)
     text = RE_LAST_NEW_COMMITS.sub(commits_list, text)
 
@@ -934,7 +1033,7 @@ def trac2markdown(text, base_path, conv_help, multilines=default_multilines):
     return text
 
 
-class ConversionHelper:
+class IssuesConversionHelper:
     """
     A class that provides conversion methods that depend on information collected
     at startup, such as Wiki page names and configuration flags.
@@ -951,14 +1050,11 @@ class ConversionHelper:
 
         self._pagenames_splitted = pagenames_splitted
         self._pagenames_not_splitted = pagenames_not_splitted
-        self._keep_trac_ticket_references = False
         self._attachment_path = ''
-        if config.has_option('source', 'keep_trac_ticket_references') :
-            self._keep_trac_ticket_references = config.getboolean('source', 'keep_trac_ticket_references')
 
-    def set_path(self, pagename):
+    def set_wikipage_paths(self, pagename):
         """
-        Set paths from pagename
+        Set paths from the wiki pagename
         """
         gh_pagename = ' '.join(pagename.split('/'))
         self._attachment_path = gh_pagename  #  attachment_path for the wiki_image method
@@ -970,18 +1066,40 @@ class ConversionHelper:
                 f.write(self._trac_wiki_path + ' ' + self._wiki_path)
                 f.write('\n')
 
+    def set_ticket_paths(self, ticket_id):
+        """
+        Set paths from the ticket id.
+        """
+        self._ticket_id = ticket_id
+        self._attachment_path = os.path.join(attachment_export_url, 'ticket' + str(ticket_id))
+
+    def ticket_attachment(self, match):
+        filename = match.group(1)
+        if len(match.groups()) >= 2:
+            label = match.group(2)
+        else:
+            label = 'attachment:' + filename
+
+        if keep_trac_ticket_references:
+            return r'[%s](%s/ticket/%s/%s)' % (label, trac_url_attachment, str(self._ticket_id), filename)
+
+        if not re.fullmatch('[-A-Za-z0-9_.]*', filename):
+            import pathlib
+            from hashlib import md5
+            extension = pathlib.Path(filename).suffix
+            filename = md5(filename.encode('utf-8')).hexdigest() + extension
+        return r'[%s](%s)' % (label, os.path.join(self._attachment_path, filename))
+
     def ticket_link(self, match):
         """
         Return a formatted string that replaces the match object found by re
         in the case of a Trac ticket link.
         """
         ticket = match.groups()[0]
-        if self._keep_trac_ticket_references:
-            # as long as the ticket themselves have not been migrated they should reference to the original place
+        if keep_trac_ticket_references:
             return r'[#%s](%s/%s)' % (ticket, trac_url_ticket, ticket)
-        else:
-            # leave them as is
-            return r'#%s' % ticket
+        issue = ticket
+        return r'#%s' % ticket
 
     def ticket_comment_link(self, match):
         """
@@ -990,12 +1108,170 @@ class ConversionHelper:
         """
         ticket = match.group(1)
         comment = match.group(2)
-        if self._keep_trac_ticket_references:
-            # as long as the ticket themselves have not been migrated they should reference to the original place
-            return r'[#%s comment:%s](%s/%s#comment:%s)' % (ticket, comment, trac_url_ticket, ticket, comment)
+        if len(match.groups()) < 3:
+            label = '#{} comment:{}'.format(ticket, comment)
         else:
-            # leave them as is
-            return r'ticket:%s#comment:%s' % (ticket, comment)
+            label = match.group(3)
+        if keep_trac_ticket_references:
+            return r'[%s](%s/%s#comment:%s)' % (label, trac_url_ticket, ticket, comment)
+        return r'[%s](%s/issues/%s#comment:%s)' % (label, target_url_issues_repo, ticket, comment)
+
+    def wiki_image(self, match):
+        """
+        Return a formatted string that replaces the match object found by re
+        in the case of a wiki link to an attached image.
+        """
+        mg = match.groups()
+        filename = os.path.join(self._attachment_path, mg[0])
+        if len(mg) > 1:
+            return r'<img src="%s" width=%s>' % (filename, mg[1])
+        else:
+            return r'<img src="%s">' % filename
+
+    def wiki_link(self, match):
+        """
+        Return a formatted string that replaces the match object found by re
+        in the case of a link to a wiki page.
+        """
+        mg = match.groups()
+        pagename = mg[0]
+        if len(mg) > 1:
+            display = mg[1]
+            if not display:
+                display = pagename
+        else:
+            display = pagename
+
+        # take care of section references
+        pagename_sect = pagename.split('#')
+        pagename_ori = pagename
+        if len(pagename_sect) > 1:
+            pagename = pagename_sect[0]
+            if not display:
+                display = pagename_sect[1]
+
+        if pagename.startswith('http'):
+            link = pagename_ori.strip()
+            return r'OPENING__LEFT__BRACKET%sCLOSING__RIGHT__BRACKET(%s)' % (display, link)
+        elif pagename in self._pagenames_splitted:
+            link = pagename_ori.replace(' ', '')
+            if link in wiki_path_conversion_table:
+                link = wiki_path_conversion_table[link]
+            else:
+                link = pagename_ori.replace(' ', '-')
+            return r'OPENING__LEFT__BRACKET%sCLOSING__RIGHT__BRACKET(%s)' % (display, '../wiki/' + link)
+        elif pagename in self._pagenames_not_splitted:
+            link = pagename_ori.replace(' ', '')
+            if link in wiki_path_conversion_table:
+                link = wiki_path_conversion_table[link]
+            else:
+                link = pagename_ori.replace(' ', '-')
+            return r'OPENING__LEFT__BRACKET%sCLOSING__RIGHT__BRACKET(%s)' % (display, '../wiki/' + link)
+        else:
+            # we assume that this is a Trac macro like TicketQuery
+            macro_split = pagename.split('(')
+            macro = macro_split[0]
+            args = None
+            if len(macro_split) > 1:
+                args =  macro_split[1]
+            display = 'This is the Trac macro *%s* that was inherited from the migration' % macro
+            link = '%s/WikiMacros#%s-macro' % (trac_url_wiki, macro)
+            if args:
+                return r'OPENING__LEFT__BRACKET%s called with arguments (%s)CLOSING__RIGHT__BRACKET(%s)' % (display, args, link)
+            return r'OPENING__LEFT__BRACKET%sCLOSING__RIGHT__BRACKET(%s)' % (display, link)
+
+    def camelcase_wiki_link(self, match):
+        """
+        Return a formatted string that replaces the match object found by re
+        in the case of a link to a wiki page recognized from CamelCase.
+        """
+        if match.group(1) in self._pagenames_splitted:
+            return self.wiki_link(match)
+        return match.group(0)
+
+
+class WikiConversionHelper:
+    """
+    A class that provides conversion methods that depend on information collected
+    at startup, such as Wiki page names and configuration flags.
+    """
+    def __init__(self, source):
+        """
+        The Python constructor collects all the necessary information.
+        """
+        pagenames = source.wiki.getAllPages()
+        pagenames_splitted = []
+        for p in pagenames:
+            pagenames_splitted += p.split('/')
+        pagenames_not_splitted = [p for p in pagenames if not p in pagenames_splitted]
+
+        self._pagenames_splitted = pagenames_splitted
+        self._pagenames_not_splitted = pagenames_not_splitted
+        self._attachment_path = ''
+
+    def set_wikipage_paths(self, pagename):
+        """
+        Set paths from the wiki pagename
+        """
+        gh_pagename = ' '.join(pagename.split('/'))
+        self._attachment_path = gh_pagename  #  attachment_path for the wiki_image method
+        self._trac_wiki_path = pagename.replace(' ', '%20')
+        self._wiki_path = gh_pagename.replace(' ', '-')
+
+        if create_wiki_link_conversion_table:
+            with open('wiki_path_conversion_table.txt', "a") as f:
+                f.write(self._trac_wiki_path + ' ' + self._wiki_path)
+                f.write('\n')
+
+    def set_ticket_paths(self, ticket_id):
+        """
+        Set paths from the ticket id.
+        """
+        self._ticket_id = ticket_id
+        self._attachment_path = os.path.join(attachment_export_url, 'ticket' + str(ticket_id))
+
+    def ticket_attachment(self, match):
+        filename = match.group(1)
+        if len(match.groups()) >= 2:
+            label = match.group(2)
+        else:
+            label = 'attachment:' + filename
+
+        if keep_trac_ticket_references:
+            return r'[%s](%s/ticket/%s/%s)' % (label, trac_url_attachment, str(self._ticket_id), filename)
+
+        if not re.fullmatch('[-A-Za-z0-9_.]*', filename):
+            import pathlib
+            from hashlib import md5
+            extension = pathlib.Path(filename).suffix
+            filename = md5(filename.encode('utf-8')).hexdigest() + extension
+        return r'[%s](%s)' % (label, os.path.join(self._attachment_path, filename))
+
+    def ticket_link(self, match):
+        """
+        Return a formatted string that replaces the match object found by re
+        in the case of a Trac ticket link.
+        """
+        ticket = match.groups()[0]
+        if keep_trac_ticket_references:
+            return r'[#%s](%s/%s)' % (ticket, trac_url_ticket, ticket)
+        issue = ticket
+        return r'#%s' % ticket
+
+    def ticket_comment_link(self, match):
+        """
+        Return a formatted string that replaces the match object found by re
+        in the case of a Trac ticket comment link.
+        """
+        ticket = match.group(1)
+        comment = match.group(2)
+        if len(match.groups()) < 3:
+            label = '#{} comment:{}'.format(ticket, comment)
+        else:
+            label = match.group(3)
+        if keep_trac_ticket_references:
+            return r'[%s](%s/%s#comment:%s)' % (label, trac_url_ticket, ticket, comment)
+        return r'[%s](%s/issues/%s#comment:%s)' % (label, target_url_issues_repo, ticket, comment)
 
     def wiki_image(self, match):
         """
@@ -1038,13 +1314,10 @@ class ConversionHelper:
             link = pagename_ori.replace(' ', '-')
             return r'OPENING__LEFT__BRACKET%sCLOSING__RIGHT__BRACKET(%s)' % (display, link)
         elif pagename in self._pagenames_not_splitted:
-            # Use normalized wiki pagename
-            link = pagename_ori.replace('/', ' ').replace(' ', '-')
-             # \| instead of | for wiki links in a table
+            link = pagename_ori.replace('/', ' ').replace(' ', '-')  # convert to github link
             return r'OPENING__LEFT__BRACKET%sCLOSING__RIGHT__BRACKET(%s)' % (display, link)
         else:
-            # we assume that this must be a Trac macro like TicketQuery
-            # first lets extract arguments
+            # we assume that this is a Trac macro like TicketQuery
             macro_split = pagename.split('(')
             macro = macro_split[0]
             args = None
@@ -1155,7 +1428,7 @@ def mapstatus(status):
     status = status.lower()
     if status in ['needs_review', 'needs_work', 'needs_info', 'positive_review']:
         return 'open', status.replace('_', ' ')
-    elif status in ['new', 'assigned', 'analyzed', 'reopened', 'open', 'needs_info_new']:
+    elif status in ['', 'new', 'assigned', 'analyzed', 'reopened', 'open', 'needs_info_new']:
         return 'open', None
     elif status in ['closed'] :
         return 'closed', None
@@ -1236,7 +1509,7 @@ def mapmilestone(title):
 def gh_create_milestone(dest, milestone_data) :
     if dest is None : return None
 
-    milestone = dest.create_milestone(milestone_data['title'], milestone_data['state'], milestone_data['description'], milestone_data.get('due_date', GithubObject.NotSet) )
+    milestone = dest.create_milestone(milestone_data['title'], milestone_data['state'], milestone_data['description'], milestone_data.get('due_date', GithubObject.NotSet), user=gh_user_url(dest, 'git') )
     sleep(sleep_after_request)
     return milestone
 
@@ -1270,9 +1543,15 @@ def gh_create_issue(dest, issue_data) :
         if user_url:
             issue_data['user'] = user_url
 
+    assignee = issue_data.pop('assignee', GithubObject.NotSet)
+    if assignee is GithubObject.NotSet:
+        assignees = []
+    else:
+        assignees = [assignee]
+
     gh_issue = dest.create_issue(issue_data.pop('title'),
                                  description,
-                                 assignee=issue_data.pop('assignee', GithubObject.NotSet),
+                                 assignee=assignee, assignees=assignees,
                                  milestone=issue_data.pop('milestone', GithubObject.NotSet),
                                  labels=labels,
                                  **issue_data)
@@ -1282,28 +1561,45 @@ def gh_create_issue(dest, issue_data) :
 
     return gh_issue
 
+def attachment_path(src_ticket_id, filename):
+    if not re.fullmatch('[-A-Za-z0-9_.]*', filename):
+        import pathlib
+        from hashlib import md5
+        extension = pathlib.Path(filename).suffix
+        filename = md5(filename.encode('utf-8')).hexdigest() + extension
+    return 'ticket' + str(src_ticket_id) + '/' + filename
+
+def gh_attachment_url(src_ticket_id, filename):
+    # Example attached to https://github.com/sagemath/trac-to-github/issues/53:
+    # - https://github.com/sagemath/trac-to-github/files/10328066/test_attachment.txt
+    return attachment_export_url + attachment_path(src_ticket_id, filename)
+
 def gh_comment_issue(dest, issue, comment, src_ticket_id, comment_id=None):
-    # upload attachement, if there is one
-    if 'attachment_name' in comment :
-        filename = comment.pop('attachment_name')
-        attachment = comment.pop('attachment')
+    preamble = ''
+    attachments = comment.pop('attachments', [])
+    # upload attachments, if there are any
+    for attachment in attachments:
+        filename = attachment['attachment_name']
+        attachment = attachment['attachment']
         if attachment_export:
             dirname = os.path.join(attachment_export_dir, 'ticket' + str(src_ticket_id))
             if not os.path.isdir(dirname) :
                 os.makedirs(dirname)
             # write attachment data to binary file
             open(os.path.join(dirname, filename), 'wb').write(attachment)
-            attachment_url = attachment_export_url + 'ticket' + str(src_ticket_id) + '/' + filename
+            attachment_url = gh_attachment_url(src_ticket_id, filename)
             if github:
                 note = 'Attachment [%s](%s) by %s created at %s' % (filename, attachment_url, comment['user'], comment['created_at'])
             else:
-                note = ''
+                note = '**Attachment:** [%s](%s)' % (filename, attachment_url)
                 user_url = gh_user_url(dest, comment['user'])
-                issue.create_attachment(filename,
-                                        "application/octet-stream",
-                                        attachment_url,
-                                        user=user_url,
-                                        created_at=comment['created_at'])
+                a = issue.create_attachment(filename,
+                                            "application/octet-stream",
+                                            user=user_url,
+                                            asset_url="tarball://root/attachments/" + attachment_path(src_ticket_id, filename),
+                                            created_at=comment['created_at'])
+                assert attachment_url == a.url, f'{attachment_url} != {a.url}'
+
         elif gh_user is not None:
             if dest is None : return
             gistname = dest.name + ' issue ' + str(issue.number) + ' attachment ' + filename
@@ -1315,21 +1611,21 @@ def gh_comment_issue(dest, issue, comment, src_ticket_id, comment_id=None):
                 note = 'Attachment [%s](%s) by %s created at %s' % (filename, gist.files[gistname].raw_url, comment['user'], comment['created_at'])
             except UnicodeDecodeError :
                 note = 'Binary attachment %s by %s created at %s lost by Trac to GitHub conversion.' % (filename, comment['user'], comment['created_at'])
-                print ('  LOSING ATTACHMENT', filename, 'in issue', issue.number)
+                logging.warning('losing attachment', filename, 'in issue', issue.number)
             sleep(sleep_after_attachment)
         else:
             note = 'Attachment'
-    else :
-        if github:
-            note = 'Comment by %s created at %s' % (comment.pop('user'), comment.pop('created_at'))
-        else:
-            note = ''
+        if preamble:
+            preamble += '\n\n'
+        preamble += note
 
-    body = comment.pop('note', '')
-    if body:
-        if note:
-            note += '\n\n'
-        note += body
+    if not preamble and github:
+        preamble = 'Comment by %s created at %s' % (comment.pop('user'), comment.pop('created_at'))
+
+    note = comment.pop('note', '')
+    if preamble and note:
+        preamble += '\n\n'
+    note = preamble + note
 
     if comment_id:
         anchor = f"<a id='comment:{comment_id}'></a>"
@@ -1345,24 +1641,25 @@ def gh_comment_issue(dest, issue, comment, src_ticket_id, comment_id=None):
     issue.create_comment(note, **comment)
     sleep(sleep_after_request)
 
-def normalize_labels(labels):
+def normalize_labels(dest, labels):
     if 'duplicate/invalid/wontfix' in labels:
         labels.remove('duplicate/invalid/wontfix')
         if any(x in labels for x in ['duplicate', 'invalid', 'wontfix']):
             return
         labels.append('invalid')
+        gh_ensure_label(dest, 'invalid', labelcolor['milestone'])
 
 def gh_update_issue_property(dest, issue, key, val, oldval=None, **kwds):
     if dest is None : return
 
     if key == 'labels':
         labels = [gh_labels[label.lower()] for label in val if label]
-        normalize_labels(labels)
+        normalize_labels(dest, labels)
         if github:
             issue.set_labels(*labels)
         else:
             oldlabels = [gh_labels[label.lower()] for label in oldval if label]
-            normalize_labels(oldlabels)
+            normalize_labels(dest, oldlabels)
             for label in oldlabels:
                 if label not in labels:
                     # https://docs.github.com/en/developers/webhooks-and-events/events/issue-event-types#unlabeled
@@ -1409,23 +1706,31 @@ def gh_update_issue_property(dest, issue, key, val, oldval=None, **kwds):
 
 unmapped_users = defaultdict(lambda: 0)
 
-def gh_username(dest, origname) :
+def convert_trac_username(origname):
+    if origname in ignored_values:
+        return None
     origname = origname.strip('\u200b')
     if origname.startswith('gh-'):
-        return '@' + origname[3:]
+        return origname[3:]
     if origname.startswith('github/'):
         # example: https://trac.sagemath.org/ticket/17999
-        return '@' + origname[7:]
+        return origname[7:]
     if origname.startswith('gh:'):
         # example: https://trac.sagemath.org/ticket/24876
-        return '@' + origname[3:]
+        return origname[3:]
     gh_name = users_map.get(origname, None)
     if gh_name:
-        return '@' + gh_name
+        return gh_name
     assert not origname.startswith('@')
     if re.fullmatch('[-A-Za-z._0-9]+', origname):
         # heuristic pattern for valid Trac account name (not an email address or full name or junk)
         unmapped_users[origname] += 1
+    return None
+
+def gh_username(dest, origname):
+    github_name = convert_trac_username(origname)
+    if github_name:
+        return '@' + github_name
     return origname
 
 def gh_user_url(dest, username):
@@ -1488,7 +1793,7 @@ def get_all_tickets(filter_issues):
     return call()
 
 def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
-    conv_help = ConversionHelper(source)
+    conv_help = IssuesConversionHelper(source)
 
     if migrate_milestones:
         for milestone_name in get_all_milestones(source):
@@ -1547,9 +1852,28 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
 
         log.info('Migrating ticket #%s (%3d changes): "%s"' % (src_ticket_id, len(changelog), src_ticket_data['summary'][:50].replace('"', '\'')))
 
+        conv_help.set_ticket_paths(src_ticket_id)
+
         def issue_description(src_ticket_data):
             description_pre = ""
             description_post = ""
+
+            dependencies = src_ticket_data.pop('dependencies', '')
+            other_deps = []
+            for dep in dependencies.replace(';', ' ').replace(',', ' ').split():
+                dep = dep.strip()
+                if m := re.fullmatch('#?([0-9]+)', dep):
+                    # Use this phrase, used by various dependency managers:
+                    # https://www.dpulls.com/
+                    # https://github.com/z0al/dependent-issues
+                    # https://github.com/gregsdennis/dependencies-action/pull/5
+                    description_post += f'\n\nDepends on #{m.group(1)}'
+                elif dep:
+                    # some free form remark in Dependencies
+                    other_deps.append(dep)
+            if other_deps:
+                # put it back
+                src_ticket_data['dependencies'] = dependencies
 
             owner = gh_username_list(dest, src_ticket_data.pop('owner', None))
             if owner:
@@ -1680,7 +2004,7 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
                 labels.append(label)
                 gh_ensure_label(dest, label, labelcolor.get(label, None) or labelcolor['resolution'])
 
-            normalize_labels(labels)
+            normalize_labels(dest, labels)
             return milestone, labels
 
         def title_status(summary, status=None):
@@ -1719,7 +2043,9 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
         if not github:
             issue_data['user'] = gh_username(dest, tmp_src_ticket_data.pop('reporter'))
             issue_data['created_at'] = convert_xmlrpc_datetime(time_created)
+            issue_data['updated_at'] = convert_xmlrpc_datetime(time_changed)
             issue_data['number'] = int(src_ticket_id)
+            issue_data['reactions'] = []
             # Find closed_at
             for time, author, change_type, oldvalue, newvalue, permanent in reversed(changelog):
                 if change_type == 'status':
@@ -1744,6 +2070,7 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
             milestone, labels = milestone_labels(tmp_src_ticket_data, status)
 
         issue_state, label = mapstatus(status)
+        last_sha = None
 
         def update_labels(labels, add_label, remove_label, label_category='type'):
             oldlabels = copy(labels)
@@ -1753,7 +2080,7 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
             if add_label:
                 labels.append(add_label)
                 gh_ensure_label(dest, add_label, labelcolor[label_category])
-            normalize_labels(labels)
+            normalize_labels(dest, labels)
             if set(labels) != set(oldlabels):
                 gh_update_issue_property(dest, issue, 'labels', labels, oldval=oldlabels, **event_data)
             return labels
@@ -1765,10 +2092,15 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
             newstate, newlabel = mapstatus(newvalue)
             new_labels = update_labels(labels, newlabel, oldlabel)
             if issue_state != newstate :
+                if newstate == 'closed' and last_sha:
+                    if closing_sha := closing_commits.get((src_ticket_id, last_sha), None):
+                        # commit_id (string) -- The SHA of the commit that referenced this issue.
+                        event_data['commit_id'] = closing_sha
+                        # commit_url (string) -- The GitHub REST API link to the commit that referenced this issue.
                 gh_update_issue_property(dest, issue, 'state', newstate, **event_data)
             return issue_state, new_labels
 
-        attachment = None
+        attachments = []
         for change in changelog:
             time, author, change_type, oldvalue, newvalue, permanent = change
             change_time = str(convert_xmlrpc_datetime(time))
@@ -1784,28 +2116,27 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
             comment_data = {
                 'created_at': convert_trac_datetime(change_time),
                 'user': user,
+                'formatter': 'markdown',
             }
             event_data = {
                 'created_at': convert_trac_datetime(change_time),
                 'actor': user_url,
             }
             if change_type == "attachment":
-                # The attachment will be described in the next change!
-                attachment = change
+                # The attachment may be described in the next comment
+                attachments.append({'attachment': get_ticket_attachment(source, src_ticket_id, newvalue).data,
+                                    'attachment_name': newvalue})
             elif change_type == "comment":
                 # oldvalue is here either x or y.x, where x is the number of this comment and y is the number of the comment that is replied to
                 m = re.match('([0-9]+.)?([0-9]+)', oldvalue)
                 x = m and m.group(2)
                 desc = newvalue.strip();
-                if desc == '' and attachment is None :
+                if not desc and not attachments:
                     # empty description and not description of attachment
                     continue
                 comment_data['note'] = trac2markdown(desc, '/issues/', conv_help, False)
-
-                if attachment is not None :
-                    comment_data['attachment_name'] = attachment[4]  # name of attachment
-                    comment_data['attachment'] = get_ticket_attachment(source, src_ticket_id, attachment[4]).data
-                    attachment = None
+                comment_data['attachments'] = attachments
+                attachments = []
                 gh_comment_issue(dest, issue, comment_data, src_ticket_id, comment_id=x)
             elif change_type.startswith("_comment") :
                 # this is an old version of a comment, which has been edited later (given in previous change),
@@ -1928,14 +2259,21 @@ def convert_issues(source, dest, only_issues = None, blacklist_issues = None):
                         if oldvalue:
                             oldvalue = github_ref_markdown(oldvalue)
                         if newvalue:
+                            if re.fullmatch('[0-9a-f]{40}', newvalue):
+                                # Store for closing references
+                                last_sha = newvalue
                             newvalue = github_ref_markdown(newvalue)
+                    change_type = change_type.replace('_', ' ')
                     if not oldvalue:
                         comment_data['note'] = f'**{change_type.title()}:** {newvalue}'
                     else:
                         comment_data['note'] = f'**Changing {change_type}** from "{oldvalue}" to "{newvalue}".'
                     gh_comment_issue(dest, issue, comment_data, src_ticket_id)
 
-        #assert attachment is None
+        if attachments:
+            comment_data['attachments'] = attachments
+            attachments = []
+            gh_comment_issue(dest, issue, comment_data, src_ticket_id)
 
         ticketcount += 1
         if ticketcount % 10 == 0 and sleep_after_10tickets > 0 :
@@ -1949,7 +2287,7 @@ def convert_wiki(source, dest):
         os.makedirs(wiki_export_dir)
 
     client.MultiCall(source)
-    conv_help = ConversionHelper(source)
+    conv_help = WikiConversionHelper(source)
 
     if os.path.exists('links.txt'):
         os.remove('links.txt')
@@ -1965,7 +2303,7 @@ def convert_wiki(source, dest):
         # Github wiki does not have folder structure
         gh_pagename = ' '.join(pagename.split('/'))
 
-        conv_help.set_path(pagename)
+        conv_help.set_wikipage_paths(pagename)
         converted = trac2markdown(page, os.path.dirname('/wiki/%s' % gh_pagename), conv_help)
 
         attachments = []
@@ -2003,6 +2341,73 @@ def convert_wiki(source, dest):
             print ('  Retrying with UTF-8 encoding')
             codecs.open(outfile, 'w', 'utf-8').write(converted)
 
+def output_unmapped_users(data):
+    table = Table(title="Unmapped users")
+    table.add_column("Username", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Frequency", style="magenta")
+
+    for key, frequency in data:
+        table.add_row(key, str(frequency))
+
+    console = Console()
+    console.print(table)
+
+    # The file is created if not exists
+    if not os.path.exists('unmapped_users.txt'):
+        with open('unmapped_users.txt', 'a') as f:
+            for key, frequency in data:
+                f.write(' '.join([key, str(frequency)]) +'\n')
+
+def output_unmapped_milestones(data):
+    table = Table(title="Unmapped milestones")
+    table.add_column("Milestone", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Frequency", style="magenta")
+
+    for key, frequency in data:
+        table.add_row(key, str(frequency))
+
+    console = Console()
+    console.print(table)
+
+    # The file is created if not exists
+    if not os.path.exists('unmapped_milestones.txt'):
+        with open('unmapped_milestones.txt', 'a') as f:
+            for key, frequency in data:
+                f.write(' '.join([key, str(frequency)]) +'\n')
+
+def output_keyword_frequency(data):
+    table = Table(title="Keyword frequency")
+    table.add_column("Keyword", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Frequency", style="magenta")
+
+    for key, frequency in data:
+        table.add_row(key, str(frequency))
+
+    console = Console()
+    console.print(table)
+
+    # The file is created if not exists
+    if not os.path.exists('keyword_frequency.txt'):
+        with open('keyword_frequency.txt', 'a') as f:
+            for key, frequency in data:
+                f.write(' '.join([key, str(frequency)]) +'\n')
+
+def output_component_frequency(data):
+    table = Table(title="Component frequency")
+    table.add_column("Component", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Frequency", style="magenta")
+
+    for keyword, frequency in data:
+        table.add_row(keyword, str(frequency))
+
+    console = Console()
+    console.print(table)
+
+    # The file is created if not exists
+    if not os.path.exists('component_frequency.txt'):
+        with open('component_frequency.txt', 'a') as f:
+            for key, frequency in data:
+                f.write(' '.join([key, str(frequency)]) +'\n')
 
 if __name__ == "__main__":
 
@@ -2031,19 +2436,20 @@ if __name__ == "__main__":
             #print 'Existing labels:', gh_labels.keys()
         else:
             requester = MigrationArchiveWritingRequester(migration_archive, wiki_export_dir)
-            dest = Repository(requester, None, dict(name="sagetest",
-                                                    url="https://github.com/sagemath/sagetest"), None)
+            dest = Repository(requester, None, dict(name=github_project,
+                                                    url=target_url_issues_repo), None)
             #print(dest.url)
             sleep_after_request = 0
 
     try:
         if must_convert_issues:
+            read_closing_commits()
             convert_issues(source, dest, only_issues = only_issues, blacklist_issues = blacklist_issues)
 
         if must_convert_wiki:
             convert_wiki(source, dest)
     finally:
-        print(f'Unmapped users: {sorted(unmapped_users.items(), key=lambda x: -x[1])}')
-        print(f'Unmapped keyword frequencies: {sorted(keyword_frequency.items(), key=lambda x: -x[1])}')
-        print(f'Unmapped milestones: {sorted(unmapped_milestones.items(), key=lambda x: -x[1])}')
-        print(f'Components: {sorted(component_frequency.items(), key=lambda x: -x[1])}')
+        output_unmapped_users(sorted(unmapped_users.items(), key=lambda x: -x[1]))
+        output_unmapped_milestones(sorted(unmapped_milestones.items(), key=lambda x: -x[1]))
+        output_keyword_frequency(sorted(keyword_frequency.items(), key=lambda x: -x[1]))
+        output_component_frequency(sorted(component_frequency.items(), key=lambda x: -x[1]))

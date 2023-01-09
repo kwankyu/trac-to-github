@@ -74,9 +74,11 @@ class MigrationArchiveWritingRequester:
         match verb, endpoint:
             case 'POST', ['labels']:
                 output['type'] = 'label'
+                output['repository'] = base_url[:-1]  # strip final /
                 url = urljoin(base_url, 'labels/' + quote(input['name']))
             case 'POST', ['milestones']:
                 output['type'] = 'milestone'
+                output['repository'] = base_url[:-1]  # strip final /
                 url = urljoin(base_url, 'milestones/' + quote(input['title']))
             case 'POST', ['issues']:
                 # Create a new issue
@@ -87,6 +89,7 @@ class MigrationArchiveWritingRequester:
                 else:
                     self._num_issues += 1
                 issue = self._num_issues
+                output['repository'] = base_url[:-1]  # strip final /
                 url = urljoin(base_url, f'issues/{issue}')
             case 'POST', ['issues', issue, 'comments']:
                 # Create an issue comment
@@ -105,10 +108,11 @@ class MigrationArchiveWritingRequester:
             case 'POST', ['issues', issue, 'attachments']:
                 # Create an attachment
                 output['type'] = 'attachment'
+                output['repository'] = base_url[:-1]  # strip final /
                 output['issue'] = urljoin(base_url, f'issues/{issue}')
                 # https://github.github.com/enterprise-migrations/#/./2.1-export-archive-format?id=attachment
-                extension = pathlib.Path(input['asset_name']).suffix
-                url = f'https://github.com/assets/some-id/some-uuid{extension}'  # FIXME
+                attachment_path = '/'.join(urlparse(input['asset_url']).path.split('/')[2:])
+                url = urljoin(base_url, f'files/{attachment_path}')
         if isinstance(output, dict):
             output['url'] = url
             dump = json.dumps(output, sort_keys=True, indent=4)
@@ -118,7 +122,9 @@ class MigrationArchiveWritingRequester:
                 id = self._num_json_by_type[t]
                 json_file = self._migration_archive / f'{pluralize(t)}_{id:06}.json'
                 with open(json_file, 'w') as f:
+                    f.write("[\n")
                     f.write(dump)
+                    f.write("]\n")
                 log.debug(f'# Wrote {json_file}')
             else:
                 print(dump)

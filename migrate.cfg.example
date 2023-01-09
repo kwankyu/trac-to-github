@@ -12,39 +12,8 @@ url: https://example.com/xmlrpc
 # optional path to trac instance used to convert some attachments
 path: /path/to/trac/instance
 
-
-[target]
-
-# URL of the GitHub web API (default: https://api.github.com)
-# url: https://api.github.com
-
-# repo of all issues converted from trac tickets
-issues_repo_url: https://issues/repo
-
-# git repo with all branches
-git_repo_url: https://git/repo
-
-# Trac to GitLab user mappings
-usernames = {
-    'trac1': 'git1',
-    'trac2': 'git2'
-    }
-
-# URL of the GitHub web API (default: https://api.github.com)
-# url: https://api.github.com
-
-# project's path
-project_name: username/projectname
-
-# GitHub access token
-token : 2190valkrl123c
-
-# GitHub username (if no token specified)
-username: johndoe
-
-# GitHub password (if no token specified)
-password: secret
-
+# if no, a trac ticket reference is converted to the corresponding issue reference
+keep_trac_ticket_references: yes
 
 [issues]
 
@@ -94,3 +63,37 @@ migrate : yes
 # Directory where to write wiki pages to
 # This can be a clone of the projects wiki repository
 export_dir : /path/to/wiki/repository
+
+[target]
+
+# URL of the GitHub web API (default: https://api.github.com)
+# url: https://api.github.com
+
+# repo of all issues converted from trac tickets
+issues_repo_url: https://issues/repo
+
+# git repo with all branches
+git_repo_url: https://git/repo
+
+# Trac to GitLab user mappings
+usernames = {
+    'trac1': 'git1',
+    'trac2': 'git2'
+    }
+
+# URL of the GitHub web API (default: https://api.github.com)
+# url: https://api.github.com
+
+# project's path
+project_name: username/projectname
+
+# GitHub access token
+token : 2190valkrl123c
+
+# GitHub username (if no token specified)
+username: johndoe
+
+# GitHub password (if no token specified)
+password: secret
+
+

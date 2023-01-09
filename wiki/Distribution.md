@@ -149,7 +149,7 @@ See [this post on sage-devel](https://groups.google.com/d/msg/sage-devel/jdLfIKQ
 * Allows user-installs, given that the nix package manager is already installed.
 * To install: `nix-env -iA nixpkgs.sage` or on NixOS just add sage to your `environment.systemPackages`
 * Betas are usually packaged in [a PR](https://github.com/NixOS/nixpkgs/pull/44527) until the release is final.
-* Currently (2018-07-26) maintained by timokau. Any help is appreciated. If you are interested (even if you don't know anything about nix yet), [open an issue](https://github.com/NixOS/nixpkgs/issues/new) pinging `@`timokau and I'll help you get started.
+* Currently (2018-07-26) maintained by timokau. Any help is appreciated. If you are interested (even if you don't know anything about nix yet), [open an issue](https://github.com/NixOS/nixpkgs/issues/new) pinging @timokau and I'll help you get started.
 
 ## RPM package (Fedora, Mandriva)
 
@@ -157,7 +157,7 @@ See [this post on sage-devel](https://groups.google.com/d/msg/sage-devel/jdLfIKQ
 
 ## Ubuntu
 
-* packages: http://packages.ubuntu.com/sagemath derived from the [This is the Trac macro ** that was inherited from the migration](https://trac.sagemath.org/wiki/WikiMacros#-macro) packages
+* packages: http://packages.ubuntu.com/sagemath derived from the [[#Debian]] packages
 * earlier PPA: https://launchpad.net/~aims/+archive/ubuntu/sagemath
 
 ## Other

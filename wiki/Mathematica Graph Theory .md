@@ -402,7 +402,7 @@ In the following list, I tried to make the functions link to the official docume
   * Mathematica --- [InduceSubgraph](http://reference.wolfram.com/mathematica/Combinatorica/ref/InduceSubgraph.html)[g, s] constructs the subgraph of graph g induced by the list of vertices s.
 
 * Interval graph
-  * Sage --- [#8284](https://trac.sagemath.org/ticket/8284)
+  * Sage --- #8284
   * Mathematica --- [IntervalGraph](http://reference.wolfram.com/mathematica/Combinatorica/ref/IntervalGraph.html)[l] constructs the interval graph defined by the list of intervals l.
 
 * Labeled tree to code
@@ -720,7 +720,7 @@ In the following list, I tried to make the functions link to the official docume
   * Mathematica --- [AllPairsShortestPath](http://reference.wolfram.com/mathematica/Combinatorica/ref/AllPairsShortestPath.html)[g] gives a matrix, where the `(i,j)^(th)` entry is the length of a shortest path in g  between vertices i  and j.
 
 * Bellman-Ford algorithm
-   * Sage --- [#8714](https://trac.sagemath.org/ticket/8714)
+   * Sage --- #8714
    * Mathematica --- [BellmanFord](http://reference.wolfram.com/mathematica/Combinatorica/ref/BellmanFord.html)[g, v] gives a shortest-path spanning tree and associated distances from vertex v of graph g. The shortest-path spanning tree is given by a list in which element i is the predecessor of vertex i in the shortest-path spanning tree. [BellmanFord](http://reference.wolfram.com/mathematica/Combinatorica/ref/BellmanFord.html) works correctly even when the edge weights are negative, provided there are no negative cycles.
 
 * Diameter

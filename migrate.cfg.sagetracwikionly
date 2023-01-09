@@ -7,9 +7,6 @@
 # unauthenticated works for globally readable trac instances
 url: https://trac.sagemath.org/xmlrpc
 
-# Should references to tickets still point to Trac?
-keep_trac_ticket_references: yes
-
 # authentication broken with python3.8 or later, due to
 # https://github.com/python/cpython/issues/82219
 # url: http://username:password@example.com/trac/login/xmlrpc
@@ -17,39 +14,8 @@ keep_trac_ticket_references: yes
 # optional path to trac instance used to convert some attachments
 # path: /path/to/trac/instance
 
-
-[target]
-
-# URL of the GitHub web API (default: https://api.github.com)
-# url: https://api.github.com
-
-# repo of all issues converted from trac tickets
-issues_repo_url: https://github.com/sagemath/sage
-
-# git repo with all branches
-git_repo_url: https://github.com/sagemath/sagetrac-mirror
-
-# Trac to GitLab user mappings
-usernames = {
-    'trac1': 'git1',
-    'trac2': 'git2'
-    }
-
-# project's path
-project_name: foo/bar
-
-# URL of the GitHub web API (default: https://api.github.com)
-# url: https://api.github.com
-
-# GitHub access token
-token : 2190valkrl123c
-
-# GitHub username (if no token specified)
-username: johndoe
-
-# GitHub password (if no token specified)
-password: secret
-
+# if no, a trac ticket reference is converted to the corresponding issue reference
+keep_trac_ticket_references: yes
 
 [issues]
 
@@ -99,3 +65,36 @@ migrate : yes
 # Directory where to write wiki pages to
 # This can be a clone of the projects wiki repository
 export_dir : wiki
+
+[target]
+
+# URL of the GitHub web API (default: https://api.github.com)
+# url: https://api.github.com
+
+# repo of all issues converted from trac tickets
+issues_repo_url: https://github.com/sagemath/sage
+
+# git repo with all branches
+git_repo_url: https://github.com/sagemath/sagetrac-mirror
+
+# Trac to GitLab user mappings
+usernames = {
+    'trac1': 'git1',
+    'trac2': 'git2'
+    }
+
+# project's path
+project_name: foo/bar
+
+# URL of the GitHub web API (default: https://api.github.com)
+# url: https://api.github.com
+
+# GitHub access token
+token : 2190valkrl123c
+
+# GitHub username (if no token specified)
+username: johndoe
+
+# GitHub password (if no token specified)
+password: secret
+
